@@ -1,40 +1,46 @@
 /**
- * CANVAS GRADING HUB
- * Dashboard + Missing Submissions
- * VERSION 2.1 (Master Code)
+ * CANVAS GRADING HUB - MASTER CODE
+ * VERSION 2.1
  *
- * - Day 1–5 "Recent Submissions" Dashboard
- * - Missing Submissions by latest created assignments
- * - Settings-driven behavior (Hours Back, Only Ungraded, Highlight Late)
- * - Improved error messaging for permissions / API failures
- * - Improved Missing Submissions dialog UX (button disables, clear status, auto-close)
+ * This file contains all of the Canvas logic:
+ *  - Day 1–5 "Recent Submissions" dashboard
+ *  - Missing Submissions by latest created assignments
+ *  - Settings helpers (Hours Back, Only Ungraded, Highlight Late)
+ *  - Triggers + Help
+ *
+ * The menu, update system, and bootstrap loader live in Bootstrap.gs.
  */
 
-// ============================================
-// SETTINGS & HELPERS
-// ============================================
+const CANVAS_HUB_VERSION = '2.1'; // used by the bootstrap/update system
+
+// =====================================================
+// SETTINGS & SHARED HELPERS
+// =====================================================
 
 /**
- * Read Settings tab (expects rows like: Setting | Value)
- * Required keys:
- *   Canvas Base URL
- *   Canvas API Token
- *   Course IDs (comma-separated)
- * Optional keys:
- *   Hours to Look Back
- *   Run Time
- *   Show Only Ungraded?
- *   Highlight Late Submissions?
+ * Read the Settings sheet.
+ * Expects rows like:  Setting | Value
+ * Required:
+ *   - Canvas Base URL
+ *   - Canvas API Token
+ *   - Course IDs (comma-separated)
+ * Optional:
+ *   - Hours to Look Back
+ *   - Run Time (info only)
+ *   - Show Only Ungraded?
+ *   - Highlight Late Submissions?
  */
 function getSettings() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const settingsSheet = ss.getSheetByName('Settings');
-  if (!settingsSheet) throw new Error('Settings tab not found. Please create a "Settings" sheet.');
+  if (!settingsSheet) {
+    throw new Error('Settings tab not found. Please create a "Settings" sheet.');
+  }
 
   const data = settingsSheet.getDataRange().getValues();
   const settings = {};
 
-  // Start at row 3 (index 2): assumes row 1 title, row 2 column headers
+  // Start at row 3 (index 2): row 1 title, row 2 column headers.
   for (let i = 2; i < data.length; i++) {
     const key = (data[i][0] || '').toString().trim();
     const value = (data[i][1] || '').toString().trim();
@@ -42,7 +48,9 @@ function getSettings() {
   }
 
   if (!settings['Canvas Base URL'] || settings['Canvas Base URL'] === 'yourschool.instructure.com') {
-    throw new Error('Please enter your Canvas Base URL in the Settings tab (e.g. yourschool.instructure.com).');
+    throw new Error(
+      'Please enter your Canvas Base URL in the Settings tab (e.g. yourschool.instructure.com).'
+    );
   }
   if (!settings['Canvas API Token'] || settings['Canvas API Token'] === 'PASTE_YOUR_TOKEN_HERE') {
     throw new Error('Please enter your Canvas API Token in the Settings tab.');
@@ -60,15 +68,15 @@ function getSettings() {
       .split(',')
       .map(s => s.trim())
       .filter(Boolean),
-    hoursBack: parseInt(settings['Hours to Look Back'], 10) || 48,
-    runTime: settings['Run Time'] || '5', // informational only
+    hoursBack: parseInt(settings['Hours to Look Back'], 10) || 24, // default 24 hours
+    runTime: settings['Run Time'] || '5:00 AM', // informational only
     showOnlyUngraded: normalizeYesNo_(settings['Show Only Ungraded?']),
     highlightLate: normalizeYesNo_(settings['Highlight Late Submissions?'])
   };
 }
 
 /**
- * Normalize Yes/No dropdowns from Settings
+ * Normalize Yes/No dropdowns from Settings.
  */
 function normalizeYesNo_(val) {
   if (!val) return false;
@@ -76,12 +84,15 @@ function normalizeYesNo_(val) {
   return s === 'yes' || s === 'y' || s === 'true';
 }
 
+/**
+ * Canvas auth header.
+ */
 function canvasHeaders_(settings) {
   return { Authorization: 'Bearer ' + settings.apiToken };
 }
 
 /**
- * Centralized Canvas API fetch helper with better error messages
+ * Centralized Canvas API fetch helper with better error messages.
  */
 function canvasFetch_(settings, url, options, contextLabel) {
   const fullUrl = url.startsWith('http') ? url : 'https://' + settings.baseUrl + url;
@@ -91,6 +102,7 @@ function canvasFetch_(settings, url, options, contextLabel) {
 
   const res = UrlFetchApp.fetch(fullUrl, opts);
   const code = res.getResponseCode();
+
   if (code === 401 || code === 403) {
     throw new Error(
       'Canvas returned ' +
@@ -104,6 +116,7 @@ function canvasFetch_(settings, url, options, contextLabel) {
         'update it in the Settings tab, and re-run.'
     );
   }
+
   if (code < 200 || code >= 300) {
     throw new Error(
       'Canvas API error (' +
@@ -114,8 +127,10 @@ function canvasFetch_(settings, url, options, contextLabel) {
         res.getContentText().slice(0, 500)
     );
   }
+
   const text = res.getContentText();
   if (!text) return null;
+
   try {
     return JSON.parse(text);
   } catch (e) {
@@ -123,12 +138,13 @@ function canvasFetch_(settings, url, options, contextLabel) {
   }
 }
 
-// ============================================
+// =====================================================
 // RECENT SUBMISSIONS DASHBOARD (DAY 1–5)
-// ============================================
+// =====================================================
 
 /**
- * Main: refresh recent submissions into Day 1 (rotating Day 1–5)
+ * Main entry: refresh recent submissions into Day 1 (rotating Day 1–5).
+ * Called from the menu in Bootstrap.gs.
  */
 function refreshSubmissions() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -140,7 +156,9 @@ function refreshSubmissions() {
 
     if (submissions.length === 0) {
       SpreadsheetApp.getUi().alert(
-        'No new submissions found in the last ' + settings.hoursBack + ' hours.\n\nYou can adjust "Hours to Look Back" in the Settings tab.'
+        'No new submissions found in the last ' +
+          settings.hoursBack +
+          ' hours.\n\nYou can adjust "Hours to Look Back" in the Settings tab.'
       );
       return;
     }
@@ -149,7 +167,9 @@ function refreshSubmissions() {
     populateDayTab_(submissions, settings);
 
     Logger.log('=== Refresh Complete ===');
-    SpreadsheetApp.getUi().alert('Found ' + submissions.length + ' new submission(s)! Check the Day 1 tab.');
+    SpreadsheetApp.getUi().alert(
+      'Found ' + submissions.length + ' new submission(s)! Check the Day 1 tab.'
+    );
   } catch (err) {
     Logger.log('ERROR in refreshSubmissions: ' + err.message);
     SpreadsheetApp.getUi().alert('Error: ' + err.message);
@@ -157,27 +177,33 @@ function refreshSubmissions() {
 }
 
 /**
- * Gather recent submissions across all configured courses within hoursBack window
+ * Gather recent submissions across all configured courses within hoursBack window.
  */
 function fetchCanvasSubmissions_(settings) {
   const all = [];
   const cutoff = new Date(Date.now() - settings.hoursBack * 60 * 60 * 1000);
 
-  const names = {};
+  // Preload course names for nice display.
+  const courseNames = {};
   settings.courseIds.forEach(id => {
     try {
-      names[id] = getCourseName_(settings, id);
+      courseNames[id] = getCourseName_(settings, id);
     } catch (e) {
       Logger.log('Course name fallback for ' + id + ': ' + e.message);
-      names[id] = 'Course ' + id;
+      courseNames[id] = 'Course ' + id;
     }
   });
 
   settings.courseIds.forEach(courseId => {
     try {
-      const subs = fetchCourseSubmissions_(settings, courseId, names[courseId], cutoff);
+      const subs = fetchCourseSubmissions_(
+        settings,
+        courseId,
+        courseNames[courseId],
+        cutoff
+      );
       all.push.apply(all, subs);
-      Utilities.sleep(200);
+      Utilities.sleep(200); // small breather between courses
     } catch (e) {
       Logger.log('fetchCourseSubmissions error ' + courseId + ': ' + e.message);
     }
@@ -187,35 +213,48 @@ function fetchCanvasSubmissions_(settings) {
   return all;
 }
 
+/**
+ * Get Canvas course name.
+ */
 function getCourseName_(settings, courseId) {
-  const course = canvasFetch_(settings, '/api/v1/courses/' + courseId, { method: 'get' }, 'fetching course ' + courseId);
+  const course = canvasFetch_(
+    settings,
+    '/api/v1/courses/' + courseId,
+    { method: 'get' },
+    'fetching course ' + courseId
+  );
   return course && course.name ? course.name : 'Course ' + courseId;
 }
 
+/**
+ * Get submissions for all assignments in a single course.
+ */
 function fetchCourseSubmissions_(settings, courseId, courseName, cutoff) {
   const out = [];
-  const asmts = getAssignments_(settings, courseId);
-  asmts.forEach(a => {
+  const assignments = getAssignments_(settings, courseId);
+
+  assignments.forEach(asmt => {
     try {
       const subs = getAssignmentSubmissionsFiltered_(
         settings,
         courseId,
-        a.id,
-        a.name,
+        asmt.id,
+        asmt.name,
         courseName,
         cutoff
       );
       out.push.apply(out, subs);
-      Utilities.sleep(120);
+      Utilities.sleep(120); // avoid hammering Canvas
     } catch (e) {
-      Logger.log('Assignment ' + a.id + ' error: ' + e.message);
+      Logger.log('Assignment ' + asmt.id + ' error: ' + e.message);
     }
   });
+
   return out;
 }
 
 /**
- * Assignments (full list) for a course
+ * Assignments for a course.
  */
 function getAssignments_(settings, courseId) {
   try {
@@ -234,7 +273,7 @@ function getAssignments_(settings, courseId) {
 }
 
 /**
- * Submissions for a specific assignment, filtered for recency and (optionally) ungraded
+ * Submissions for a specific assignment, filtered for recency and (optionally) ungraded only.
  */
 function getAssignmentSubmissionsFiltered_(
   settings,
@@ -249,7 +288,11 @@ function getAssignmentSubmissionsFiltered_(
     arr =
       canvasFetch_(
         settings,
-        '/api/v1/courses/' + courseId + '/assignments/' + assignmentId + '/submissions?include[]=user&per_page=100',
+        '/api/v1/courses/' +
+          courseId +
+          '/assignments/' +
+          assignmentId +
+          '/submissions?include[]=user&per_page=100',
         { method: 'get' },
         'fetching submissions for assignment ' + assignmentId
       ) || [];
@@ -261,13 +304,16 @@ function getAssignmentSubmissionsFiltered_(
   const out = [];
   arr.forEach(s => {
     if (!s.submitted_at || s.workflow_state === 'unsubmitted') return;
+
     const submittedDate = new Date(s.submitted_at);
     if (submittedDate < cutoff) return;
+
     if (settings.showOnlyUngraded && s.workflow_state === 'graded') return;
 
     const studentName = s.user
       ? s.user.name || s.user.sortable_name || 'Unknown Student'
       : 'Unknown Student';
+
     const isLate = !!s.late;
 
     const link =
@@ -290,11 +336,12 @@ function getAssignmentSubmissionsFiltered_(
       speedGraderUrl: link
     });
   });
+
   return out;
 }
 
 /**
- * Rotate Day 1 → Day 2 … Day 5 drops, insert fresh Day 1
+ * Rotate Day 1–5 tabs and create a fresh Day 1.
  */
 function rotateDayTabs_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -306,12 +353,13 @@ function rotateDayTabs_() {
     const sh = ss.getSheetByName('Day ' + i);
     if (sh) sh.setName('Day ' + (i + 1));
   }
+
   const day1 = ss.insertSheet('Day 1', 0);
   setupDayTabTemplate_(day1);
 }
 
 /**
- * Day tab header + columns
+ * Configure header + columns for a Day tab.
  */
 function setupDayTabTemplate_(sheet) {
   sheet.getRange('A1:G1').merge();
@@ -328,10 +376,13 @@ function setupDayTabTemplate_(sheet) {
 
   const now = new Date();
   const dateStr = Utilities.formatDate(now, Session.getScriptTimeZone(), 'M/d/yyyy h:mm a');
+
   sheet.getRange('A2').setValue('Last Updated:').setFontWeight('bold');
   sheet.getRange('B2').setValue(dateStr);
+
   sheet.getRange('D2').setValue('Ungraded:').setFontWeight('bold');
   sheet.getRange('E2').setValue(0).setFontWeight('bold').setFontColor('#FF0000');
+
   sheet.getRange('F2').setValue('Graded:').setFontWeight('bold');
   sheet.getRange('G2').setValue(0).setFontWeight('bold').setFontColor('#008000');
 
@@ -355,7 +406,7 @@ function setupDayTabTemplate_(sheet) {
 }
 
 /**
- * Write Day 1 rows + checkboxes + late highlight + counts
+ * Fill Day 1 with rows + checkboxes + late highlighting + stats.
  */
 function populateDayTab_(submissions, settings) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -369,20 +420,24 @@ function populateDayTab_(submissions, settings) {
   });
 
   const startRow = 5;
+
   if (rows.length > 0) {
     day1.getRange(startRow, 1, rows.length, 7).setValues(rows);
 
-    // checkboxes column A
+    // Column A: checkboxes
     day1.getRange(startRow, 1, rows.length, 1).insertCheckboxes();
 
-    // Hyperlinks in column F
+    // Column F: SpeedGrader links
     for (let i = 0; i < rows.length; i++) {
       const cell = day1.getRange(startRow + i, 6);
       const url = rows[i][5];
-      cell.setFormula('=HYPERLINK("' + url + '","View Submission")');
-      cell.setHorizontalAlignment('center').setFontColor('#0B5394');
+      cell
+        .setFormula('=HYPERLINK("' + url + '","View Submission")')
+        .setHorizontalAlignment('center')
+        .setFontColor('#0B5394');
     }
 
+    // Late highlighting (optional)
     if (settings.highlightLate) {
       for (let i = 0; i < submissions.length; i++) {
         if (submissions[i].isLate) {
@@ -395,10 +450,14 @@ function populateDayTab_(submissions, settings) {
 
   const ungradedCount = submissions.filter(s => !s.isGraded).length;
   const gradedCount = submissions.filter(s => s.isGraded).length;
+
   day1.getRange('E2').setValue(ungradedCount);
   day1.getRange('G2').setValue(gradedCount);
 }
 
+/**
+ * Human-friendly "time ago" string.
+ */
 function getTimeAgo_(date) {
   const now = new Date();
   const diffMs = now - date;
@@ -412,20 +471,18 @@ function getTimeAgo_(date) {
   return days + ' days ago';
 }
 
-// ============================================
+// =====================================================
 // MISSING SUBMISSIONS (LATEST CREATED ASSIGNMENTS)
-// ============================================
+// =====================================================
 
 /**
- * Open dialog (from menu)
- * - Shows a dropdown for course selection: All or individual course
- * - Allows selecting assignment range (latest, last 2, etc.)
- * - Disables button after click and closes dialog when server call starts
+ * Show missing-submissions dialog.
+ * Called from the Canvas Hub menu (Bootstrap.gs).
  */
 function openMissingSubmissionsDialog() {
   try {
     const settings = getSettings();
-    const pairs = settings.courseIds.map(id => {
+    const coursePairs = settings.courseIds.map(id => {
       let name;
       try {
         name = getCourseName_(settings, id);
@@ -435,7 +492,7 @@ function openMissingSubmissionsDialog() {
       return { id: id, name: name };
     });
 
-    const html = buildMissingDialogHtml_(pairs);
+    const html = buildMissingDialogHtml_(coursePairs);
     SpreadsheetApp.getUi().showModalDialog(html, 'Check Missing Submissions');
   } catch (e) {
     Logger.log('openMissingSubmissionsDialog error: ' + e);
@@ -443,17 +500,18 @@ function openMissingSubmissionsDialog() {
   }
 }
 
+/**
+ * Backwards-compatible name, in case any existing script calls it.
+ */
 function buildMissingDialogHtml(coursePairs) {
-  // keep for backward compatibility if you used the old name somewhere
   return buildMissingDialogHtml_(coursePairs);
 }
 
 /**
- * HTML dialog with improved UX:
- * - Button disables on click
- * - Button text changes to "Working..."
- * - Small note: "This may take a moment..."
- * - Dialog closes as soon as startMissingSubmissions() is invoked successfully
+ * HTML dialog:
+ *  - Course dropdown (All or single course)
+ *  - Assignment range dropdown (latest, last 2, …, all)
+ *  - Button disables on click, shows "Working…", and closes when server starts.
  */
 function buildMissingDialogHtml_(coursePairs) {
   const html = HtmlService.createHtmlOutput(
@@ -510,7 +568,9 @@ function buildMissingDialogHtml_(coursePairs) {
 
               btn.disabled = true;
               btn.textContent = 'Working...';
-              status.textContent = 'Running Missing Submissions in the background. This may take a moment. Watch the toast messages at the bottom of your sheet.';
+              status.textContent =
+                'Running Missing Submissions in the background. This may take a moment. ' +
+                'Watch the toast messages at the bottom of your sheet.';
 
               google.script.run
                 .withSuccessHandler(function () {
@@ -535,9 +595,9 @@ function buildMissingDialogHtml_(coursePairs) {
 }
 
 /**
- * Server: run missing-submissions
- * @param {string} courseChoice 'ALL' or courseId
- * @param {string} rangeChoice '1' | '2' | '3' | '4' | '5' | 'ALL'
+ * Server entry for Missing Submissions.
+ * @param {string} courseChoice 'ALL' or specific courseId.
+ * @param {string} rangeChoice  '1' | '2' | '3' | '4' | '5' | 'ALL'.
  */
 function startMissingSubmissions(courseChoice, rangeChoice) {
   const ss = SpreadsheetApp.getActive();
@@ -563,13 +623,15 @@ function startMissingSubmissions(courseChoice, rangeChoice) {
 
   ss.toast('Starting Missing Submissions…', 'Missing Submissions', 5);
 
-  // Safety: keep very long runs from silently hitting time limits.
+  // Safety guard against hitting Apps Script time limits.
   const START = Date.now();
-  const MAX_MS = 5.5 * 60 * 1000;
+  const MAX_MS = 5.5 * 60 * 1000; // ~5.5 minutes
 
   let processed = 0;
+
   for (let i = 0; i < courseList.length; i++) {
     const id = courseList[i];
+
     ss.toast(
       'Processing course ' + (i + 1) + ' of ' + courseList.length + '…',
       'Missing Submissions',
@@ -580,10 +642,11 @@ function startMissingSubmissions(courseChoice, rangeChoice) {
       appendMissingForCourse_(settings, id, maxAssignments, out);
     } catch (e) {
       Logger.log('Error in appendMissingForCourse_ for course ' + id + ': ' + e.message);
-      // Continue with next course
+      // continue with next course
     }
 
     processed++;
+
     if (Date.now() - START > MAX_MS && i < courseList.length - 1) {
       const btn = ui.alert(
         'Partial run complete',
@@ -594,10 +657,12 @@ function startMissingSubmissions(courseChoice, rangeChoice) {
           ' courses.\nClick “OK” to continue with the remaining courses.',
         ui.ButtonSet.OK_CANCEL
       );
+
       if (btn !== ui.Button.OK) {
         ss.toast('Missing Submissions cancelled by user.', 'Missing Submissions', 5);
         return;
       }
+
       ss.toast('Continuing Missing Submissions…', 'Missing Submissions', 5);
       processed = 0;
     }
@@ -608,7 +673,7 @@ function startMissingSubmissions(courseChoice, rangeChoice) {
 }
 
 /**
- * Prepare/clear Missing Submissions tab
+ * Prepare / clear the "Missing Submissions" sheet.
  */
 function prepareMissingSheet_() {
   const ss = SpreadsheetApp.getActive();
@@ -656,13 +721,13 @@ function prepareMissingSheet_() {
 }
 
 /**
- * Append one course’s missing list (by latest created assignments)
+ * Append one course’s missing-submissions list.
  */
 function appendMissingForCourse_(settings, courseId, maxAssignments, out) {
   const ss = SpreadsheetApp.getActive();
   const sh = out.sheet;
 
-  // course name
+  // Course name for section header.
   let courseName;
   try {
     courseName = getCourseName_(settings, courseId);
@@ -670,7 +735,7 @@ function appendMissingForCourse_(settings, courseId, maxAssignments, out) {
     courseName = 'Course ' + courseId;
   }
 
-  // divider row
+  // Divider row per course.
   const hdr = out.nextRow++;
   sh.getRange(hdr, 1, 1, 5).merge();
   sh
@@ -680,18 +745,20 @@ function appendMissingForCourse_(settings, courseId, maxAssignments, out) {
     .setFontWeight('bold');
   sh.setRowHeight(hdr, 22);
 
-  // data fetch
+  // Data fetch.
   const students = getCourseStudents_(settings, courseId);
   let assignments = getAssignments_(settings, courseId);
 
-  // Sort by latest created (desc). Missing created_at goes last.
+  // Sort by created_at DESC (newest first).
   assignments.sort((a, b) => {
     const ad = a.created_at ? new Date(a.created_at).getTime() : -Infinity;
     const bd = b.created_at ? new Date(b.created_at).getTime() : -Infinity;
     return bd - ad;
   });
 
-  if (maxAssignments !== 'ALL') assignments = assignments.slice(0, maxAssignments);
+  if (maxAssignments !== 'ALL') {
+    assignments = assignments.slice(0, maxAssignments);
+  }
 
   if (assignments.length === 0) {
     const r = out.nextRow++;
@@ -705,11 +772,11 @@ function appendMissingForCourse_(settings, courseId, maxAssignments, out) {
   }
 
   assignments.forEach((asmt, idx) => {
-ss.toast(
-  'Checking "' + asmt.name + '" (' + (idx + 1) + ' of ' + assignments.length + ')...',
-  'Missing Submissions',
-  10
-);
+    ss.toast(
+      'Checking "' + asmt.name + '" (' + (idx + 1) + ' of ' + assignments.length + ')…',
+      'Missing Submissions',
+      10
+    );
 
     const subs = getAssignmentSubmissionsRaw_(settings, courseId, asmt.id);
     const submittedIds = new Set(
@@ -719,6 +786,7 @@ ss.toast(
     );
 
     const missing = students.filter(stu => !submittedIds.has(stu.id));
+
     if (missing.length === 0) {
       const r = out.nextRow++;
       sh.getRange(r, 1, 1, 5).merge();
@@ -737,16 +805,16 @@ ss.toast(
         )
       : '—';
 
-    // Title row for assignment
-    const title = out.nextRow++;
-    sh.getRange(title, 1, 1, 5).merge();
+    // Assignment title row.
+    const titleRow = out.nextRow++;
+    sh.getRange(titleRow, 1, 1, 5).merge();
     sh
-      .getRange(title, 1)
+      .getRange(titleRow, 1)
       .setValue(asmt.name)
       .setFontWeight('bold')
       .setBackground('#FFF2CC');
 
-    // Data rows
+    // Missing rows.
     const rows = missing.map(m => {
       const link =
         'https://' +
@@ -757,25 +825,32 @@ ss.toast(
         asmt.id +
         '&student_id=' +
         m.id;
+
       return [m.name, asmt.name, createdText, courseName, link];
     });
+
     sh.getRange(out.nextRow, 1, rows.length, 5).setValues(rows);
 
-    // Hyperlinks
+    // Hyperlinks.
     for (let i = 0; i < rows.length; i++) {
       const cell = sh.getRange(out.nextRow + i, 5);
       const url = rows[i][4];
-      cell.setFormula('=HYPERLINK("' + url + '","Open SpeedGrader")');
-      cell.setHorizontalAlignment('center').setFontColor('#0B5394');
+      cell
+        .setFormula('=HYPERLINK("' + url + '","Open SpeedGrader")')
+        .setHorizontalAlignment('center')
+        .setFontColor('#0B5394');
     }
 
     out.nextRow += rows.length;
   });
 
-  // spacer
+  // Blank spacer row after each course section.
   out.nextRow++;
 }
 
+/**
+ * Course roster (students only).
+ */
 function getCourseStudents_(settings, courseId) {
   let arr;
   try {
@@ -790,12 +865,16 @@ function getCourseStudents_(settings, courseId) {
     Logger.log('Failed to fetch students for ' + courseId + ': ' + e.message);
     return [];
   }
+
   return arr.map(u => ({
     id: u.id,
     name: u.name || u.sortable_name || 'Unknown Student'
   }));
 }
 
+/**
+ * Raw submissions for an assignment (no filtering).
+ */
 function getAssignmentSubmissionsRaw_(settings, courseId, assignmentId) {
   try {
     return (
@@ -818,28 +897,15 @@ function getAssignmentSubmissionsRaw_(settings, courseId, assignmentId) {
   }
 }
 
-// ============================================
-// MENU, TRIGGERS, HELP
-// ============================================
+// =====================================================
+// SETTINGS UTILITIES / TRIGGERS / HELP
+// (Bootstrap.gs owns onOpen + update system)
+// =====================================================
 
-function onOpen() {
-  try {
-    SpreadsheetApp.getUi()
-      .createMenu('Canvas Hub')
-      .addItem('Refresh Now (Recent Submissions)', 'refreshSubmissions')
-      .addSeparator()
-      .addItem('Check Missing Submissions', 'openMissingSubmissionsDialog')
-      .addSeparator()
-      .addItem('Update Settings', 'reloadSettings')
-      .addItem('Set Up Auto-Run (5 AM Daily)', 'setupDailyTrigger')
-      .addSeparator()
-      .addItem('Help', 'showHelp')
-      .addToUi();
-  } catch (e) {
-    Logger.log('onOpen failed: ' + e.message);
-  }
-}
-
+/**
+ * Reload settings and show a quick summary.
+ * Called from Canvas Hub → Update Settings.
+ */
 function reloadSettings() {
   try {
     const s = getSettings();
@@ -867,19 +933,41 @@ function reloadSettings() {
   }
 }
 
+/**
+ * Create or replace a daily trigger for refreshSubmissions at ~5 AM.
+ * Called from Canvas Hub → Set Up Auto-Run (5 AM Daily).
+ */
 function setupDailyTrigger() {
   const triggers = ScriptApp.getProjectTriggers();
   triggers.forEach(t => {
-    if (t.getHandlerFunction() === 'refreshSubmissions') ScriptApp.deleteTrigger(t);
+    if (t.getHandlerFunction() === 'refreshSubmissions') {
+      ScriptApp.deleteTrigger(t);
+    }
   });
-  ScriptApp.newTrigger('refreshSubmissions').timeBased().everyDays(1).atHour(5).create();
+
+  ScriptApp.newTrigger('refreshSubmissions')
+    .timeBased()
+    .everyDays(1)
+    .atHour(5)
+    .create();
+
   SpreadsheetApp.getUi().alert(
     'Auto-run set up!\n\nThe script will check for new submissions daily at 5 AM.'
   );
 }
 
+/**
+ * Simple helper so Bootstrap / future code can read the declared version.
+ */
+function getLocalVersion() {
+  return CANVAS_HUB_VERSION;
+}
+
+/**
+ * Help dialog, called from Canvas Hub → Help.
+ */
 function showHelp() {
-  const help =
+  const helpText =
     'CANVAS GRADING HUB - QUICK HELP\n\n' +
     'DAILY WORKFLOW:\n' +
     '1) Use the Day 1 tab to see recent submissions.\n' +
@@ -898,5 +986,6 @@ function showHelp() {
     'PERMISSIONS / REVOKE ACCESS:\n' +
     '- You can revoke or review Google permissions at:\n' +
     '  https://myaccount.google.com/permissions\n';
-  SpreadsheetApp.getUi().alert(help);
+
+  SpreadsheetApp.getUi().alert(helpText);
 }
