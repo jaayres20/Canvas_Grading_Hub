@@ -988,4 +988,13 @@ function showHelp() {
     '  https://myaccount.google.com/permissions\n';
 
   SpreadsheetApp.getUi().alert(helpText);
-}
+}// =====================================================
+// EXPORT PUBLIC FUNCTIONS FOR BOOTSTRAP
+// =====================================================
+
+this.refreshSubmissions = refreshSubmissions;
+this.openMissingSubmissionsDialog = openMissingSubmissionsDialog;
+this.reloadSettings = reloadSettings;
+this.setupDailyTrigger = setupDailyTrigger;
+this.showHelp = showHelp;
+this.startMissingSubmissions = startMissingSubmissions;
